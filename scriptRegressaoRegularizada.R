@@ -5,90 +5,215 @@ library(glmulti)    # all regression
 library(car)        # multicolinearidade
 library(tidyverse)  # manipulacao de dados
 library(tidymodels) # modelos de machine learning
+library(plsmod)     # uso de pls no tidymodels
 library(glmtoolbox) # testes para regressao logistica
 library(ecostats)   # grafico de envelope do modelo
 library(gtsummary)  # visualizacao dos resultados da regressao
+library(janitor)    # limpeza de dados
+library(tictoc)     # cronometrar tempo de execucao
 
 
 
 ##### CARREGANDO OS DADOS #####
 
-df<- readxl::read_xlsx("dadosVinicius.xlsx", header=TRUE) %>% data.frame()
-
+df<- readxl::read_xlsx("dadosVinicius.xlsx") %>% data.frame()
 
 
 
 ##### MANIPULANDO OS DADOS #####
 
-df %>% glimpse()  # breve visualizacao
+df<- df %>% clean_names()
+names(df)<- gsub("_1", "", names(df))
 
-df$Tipo<- df$Tipo %>% factor(labels=c("benigno","maligno"))
-df$Sexo<- df$Sexo %>% factor(labels=c("Masculino","Feminino"))
+#df %>% glimpse()  # breve visualizacao
 
-df<- df %>%
-  mutate(HL=ifelse(HL<3, "Baixa", "Alta")) %>% 
-  mutate(FF=ifelse(FF<3, "Baixa", "Alta"))
-
-df$HL<- df$HL %>% factor(levels=c("Baixa","Alta"))
-df$FF<- df$FF %>% factor(levels=c("Baixa","Alta"))
-
-df %>% glimpse()  # breve visualizacao
+#df<- na.omit(df)
+df<- df %>% filter(!is.na(grave))
+df<- df %>% dplyr::select(-id)
+df$grave<- df$grave %>% factor()
 
 
+##### SPLIT #####
 
+set.seed(0)
+split<- initial_split(df, strata=grave)
 
-##### VISUALIZANDO OS DADOS #####
+df.train<- training(split)
+df.test<- testing(split)
 
-# Tipo x Sexo - versao 1
-
-df %>% ggplot(aes(x=Sexo, fill=Tipo)) +
-  geom_bar() +
-  ylab("quantidade") +
-  theme_bw()
+#folds<- vfold_cv(df.train, v=10, strata=grave)
+folds<- vfold_cv(df.train, v=2, repeats=5, strata=grave)
 
 
 
-# Tipo x Sexo - versao 2
 
-df %>% ggplot(aes(x=Sexo, fill=Tipo)) +
-  geom_bar(position="dodge") +
-  ylab("quantidade") +
-  theme_bw()
+##### PRÉ-PROCESSAMENTO #####
 
-
-
-# Tipo x Sexo - versao 3
-
-df %>% ggplot(aes(x=Sexo, fill=Tipo)) +
-  geom_bar(position="fill") +
-  ylab("proporção") +
-  theme_bw()
+receita<- recipe(grave ~ . , data = df.train) %>%
+  step_zv(all_predictors()) %>% 
+  step_filter_missing(all_predictors(),threshold = 0.4) %>% 
+  #step_normalize(all_numeric_predictors()) %>% 
+  #step_impute_knn(all_predictors()) %>%
+  step_naomit()
 
 
 
-# Tipo x HL
 
-df %>% ggplot(aes(x=HL, fill=Tipo)) +
-  geom_bar(position="fill") +
-  ylab("proporção") +
-  theme_bw()
+##### MODELOS #####
+
+model_pls<- parsnip::pls(num_comp = tune()) %>%
+  set_engine("mixOmics") %>%
+  set_mode("classification")
+
+model_las<- logistic_reg(penalty = tune(), mixture = 1) %>%
+  set_engine("glmnet") %>%
+  set_mode("classification")
+
+model_rid<- logistic_reg(penalty = tune(), mixture = 0) %>%
+  set_engine("glmnet") %>%
+  set_mode("classification")
+
+model_net<- logistic_reg(penalty = tune(), mixture = tune()) %>%
+  set_engine("glmnet") %>%
+  set_mode("classification")
 
 
 
-### Tipo x FF
-
-df %>% ggplot(aes(x=FF, fill=Tipo)) +
-  geom_bar(position="fill") +
-  ylab("proporção") +
-  theme_bw()
 
 
+##### WORKFLOW #####
 
-### Tipo x Idade
+wf_pls<- workflow() %>%
+  add_recipe(receita) %>%
+  add_model(model_pls)
 
-df %>% ggplot(aes(y=Idade, x=Tipo, fill=Tipo)) +
-  geom_boxplot() +
-  theme_bw()
+wf_las<- workflow() %>%
+  add_recipe(receita) %>%
+  add_model(model_las)
+
+wf_rid<- workflow() %>%
+  add_recipe(receita) %>%
+  add_model(model_rid)
+
+wf_net<- workflow() %>%
+  add_recipe(receita) %>%
+  add_model(model_net)
+
+
+
+
+##### HIPERPARAMETERS TUNING - BAYESIAN SEARCH #####
+
+tic()
+tune_pls<- tune_bayes(wf_pls,
+                      resamples = folds,
+                      initial = 10,
+                      control = control_bayes(save_pred=TRUE,
+                                              save_workflow=TRUE,
+                                              seed=0),
+                      metrics = metric_set(roc_auc),
+                      param_info = parameters(num_comp(range(1, 75)))
+)
+toc()
+# 21.61 sec elapsed (~ 5.5 min)
+
+
+tic()
+tune_las<- tune_bayes(wf_las,
+                      resamples = folds,
+                      initial = 10,
+                      control = control_bayes(save_pred=TRUE,
+                                              save_workflow=TRUE,
+                                              seed=0),
+                      metrics = metric_set(roc_auc),
+                      param_info = parameters(penalty(range=c(-10,5)))
+)
+toc()
+# 59.35 sec elapsed
+
+
+tic()
+tune_rid<- tune_bayes(wf_rid,
+                      resamples = folds,
+                      initial = 10,
+                      control = control_bayes(save_pred=TRUE,
+                                              save_workflow=TRUE,
+                                              seed=0),
+                      metrics = metric_set(roc_auc),
+                      param_info = parameters(penalty(range=c(-10,5)))
+)
+toc()
+# 66.18 sec elapsed
+
+
+
+tic()
+tune_net<- tune_bayes(wf_net,
+                      resamples = folds,
+                      initial = 10,
+                      control = control_bayes(save_pred=TRUE,
+                                              save_workflow=TRUE,
+                                              seed=0),
+                      metrics = metric_set(roc_auc),
+                      param_info = parameters(penalty(range=c(-10,5)),
+                                              mixture(range=c(0,1)))
+)
+toc()
+# 75.98 sec elapsed
+
+
+
+
+## VISUALIZANDO OS MELHORES MODELOS (BEST RMSE)
+
+show_best(tune_pls,metric=roc_auc,n=3)
+show_best(tune_las,metric=roc_auc,n=3)
+show_best(tune_rid,metric=roc_auc,n=3)
+show_best(tune_net,metric=roc_auc,n=3)
+
+best_num_comp<- show_best(tune_pls,n=1)[1] %>% as.numeric()
+best_pen_las<- show_best(tune_las,n=1)[1] %>% as.numeric()
+best_pen_rid<- show_best(tune_rid,n=1)[1] %>% as.numeric()
+best_pen_net<- show_best(tune_net,n=1)[1] %>% as.numeric()
+
+best_num_comp
+best_pen_las
+best_pen_rid
+best_pen_net
+
+
+
+## MODELOS TREINADOS APÓS TUNAR OS HIPERPARAMETROS
+
+wf_pls_trained<- wf_pls %>% finalize_workflow(select_best(tune_pls))
+wf_las_trained<- wf_las %>% finalize_workflow(select_best(tune_las))
+wf_rid_trained<- wf_rid %>% finalize_workflow(select_best(tune_rid))
+
+wf_pls_trained<- fit(wf_pls_trained, df.train)
+wf_las_trained<- fit(wf_las_trained, df.train)
+wf_rid_trained<- fit(wf_rid_trained, df.train)
+
+
+## COEFICIENTES DOS MODELOS TREINADOS
+
+coef_pls_trained<- wf_pls_trained %>% 
+  extract_fit_parsnip() %>% 
+  tidy() %>% 
+  filter(component==best_num_comp) %>% 
+  dplyr::select(value)
+
+coef_las_trained<- wf_las_trained %>% 
+  extract_fit_parsnip() %>% 
+  tidy() %>% 
+  dplyr::select(estimate)
+
+coef_rid_trained<- wf_rid_trained %>% 
+  extract_fit_parsnip() %>% 
+  tidy() %>% 
+  dplyr::select(estimate)
+
+
+
 
 
 
