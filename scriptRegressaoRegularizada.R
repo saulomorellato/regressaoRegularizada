@@ -107,15 +107,16 @@ wf_net<- workflow() %>%
 tic()
 tune_pls<- tune_bayes(wf_pls,
                       resamples = folds,
-                      initial = 10,
+                      initial = 5,
                       control = control_bayes(save_pred=TRUE,
                                               save_workflow=TRUE,
                                               seed=0),
                       metrics = metric_set(roc_auc),
-                      param_info = parameters(num_comp(range(1, 75)))
+                      #metrics = metric_set(mn_log_loss),
+                      param_info = parameters(num_comp(range(1, 20)))
 )
 toc()
-# 21.61 sec elapsed (~ 5.5 min)
+# 151.08 sec elapsed
 
 
 tic()
@@ -126,7 +127,8 @@ tune_las<- tune_bayes(wf_las,
                                               save_workflow=TRUE,
                                               seed=0),
                       metrics = metric_set(roc_auc),
-                      param_info = parameters(penalty(range=c(-10,5)))
+                      #metrics = metric_set(mn_log_loss),
+                      param_info = parameters(penalty(range=c(-10,-2)))
 )
 toc()
 # 59.35 sec elapsed
@@ -140,6 +142,7 @@ tune_rid<- tune_bayes(wf_rid,
                                               save_workflow=TRUE,
                                               seed=0),
                       metrics = metric_set(roc_auc),
+                      #metrics = metric_set(mn_log_loss),
                       param_info = parameters(penalty(range=c(-10,5)))
 )
 toc()
@@ -155,6 +158,7 @@ tune_net<- tune_bayes(wf_net,
                                               save_workflow=TRUE,
                                               seed=0),
                       metrics = metric_set(roc_auc),
+                      #metrics = metric_set(mn_log_loss),
                       param_info = parameters(penalty(range=c(-10,5)),
                                               mixture(range=c(0,1)))
 )
@@ -166,32 +170,93 @@ toc()
 
 ## VISUALIZANDO OS MELHORES MODELOS (BEST RMSE)
 
-show_best(tune_pls,metric=roc_auc,n=3)
-show_best(tune_las,metric=roc_auc,n=3)
-show_best(tune_rid,metric=roc_auc,n=3)
-show_best(tune_net,metric=roc_auc,n=3)
+show_best(tune_pls,n=3)
+show_best(tune_las,n=3)
+show_best(tune_rid,n=3)
+show_best(tune_net,n=3)
 
-best_num_comp<- show_best(tune_pls,n=1)[1] %>% as.numeric()
-best_pen_las<- show_best(tune_las,n=1)[1] %>% as.numeric()
-best_pen_rid<- show_best(tune_rid,n=1)[1] %>% as.numeric()
-best_pen_net<- show_best(tune_net,n=1)[1] %>% as.numeric()
+#best_num_comp<- show_best(tune_pls,n=1)[1] %>% as.numeric()
+#best_pen_las<- show_best(tune_las,n=1)[1] %>% as.numeric()
+#best_pen_rid<- show_best(tune_rid,n=1)[1] %>% as.numeric()
+#best_pen_net<- show_best(tune_net,n=1)[1] %>% as.numeric()
 
-best_num_comp
-best_pen_las
-best_pen_rid
-best_pen_net
+#best_num_comp
+#best_pen_las
+#best_pen_rid
+#best_pen_net
 
 
 
 ## MODELOS TREINADOS APÓS TUNAR OS HIPERPARAMETROS
 
-wf_pls_trained<- wf_pls %>% finalize_workflow(select_best(tune_pls))
-wf_las_trained<- wf_las %>% finalize_workflow(select_best(tune_las))
-wf_rid_trained<- wf_rid %>% finalize_workflow(select_best(tune_rid))
+wf_pls_trained<- wf_pls %>% finalize_workflow(select_best(tune_pls)) %>% fit(df.train)
+wf_las_trained<- wf_las %>% finalize_workflow(select_best(tune_las)) %>% fit(df.train)
+wf_rid_trained<- wf_rid %>% finalize_workflow(select_best(tune_rid)) %>% fit(df.train)
+wf_net_trained<- wf_net %>% finalize_workflow(select_best(tune_net)) %>% fit(df.train)
 
-wf_pls_trained<- fit(wf_pls_trained, df.train)
-wf_las_trained<- fit(wf_las_trained, df.train)
-wf_rid_trained<- fit(wf_rid_trained, df.train)
+
+
+
+### VALIDATION ###
+
+# PREDIZENDO DADOS TESTE
+
+pred_pls<- predict(wf_pls_trained, df.test, type="prob")
+pred_las<- predict(wf_las_trained, df.test, type="prob")
+pred_rid<- predict(wf_rid_trained, df.test, type="prob")
+pred_net<- predict(wf_net_trained, df.test, type="prob")
+
+
+
+df.prob<- data.frame(df.test$grave,
+                     pred_pls[,2],
+                     pred_las[,2],
+                     pred_rid[,2],
+                     pred_net[,2])
+
+colnames(df.prob)<- c("y",
+                      "pls",
+                      "las",
+                      "rid",
+                      "net")
+
+head(df.prob)
+
+cut<- summary(df.train$grave)[2]/nrow(df.train)
+
+df.class<- df.prob %>% 
+  mutate(pls=ifelse(pls<cut,0,1)) %>% 
+  mutate(las=ifelse(las<cut,0,1)) %>% 
+  mutate(rid=ifelse(rid<cut,0,1)) %>% 
+  mutate(net=ifelse(net<cut,0,1)) %>%
+  mutate(across(!y, as.factor))
+
+df.class %>% head()    # VISUALIZANDO CLASSES
+
+
+
+
+
+#####  VERIFICANDO MEDIDAS DE CLASSIFICAÇÃO  #####
+
+medidas<- cbind(summary(conf_mat(df.class, y, pls))[,-2],
+                summary(conf_mat(df.class, y, las))[,3],
+                summary(conf_mat(df.class, y, rid))[,3],
+                summary(conf_mat(df.class, y, net))[,3])                     
+
+colnames(medidas)<- c("medida",
+                      "pls",
+                      "las",
+                      "rid",
+                      "net")
+
+medidas
+
+
+
+
+
+
 
 
 ## COEFICIENTES DOS MODELOS TREINADOS
