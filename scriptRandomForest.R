@@ -311,28 +311,47 @@ saveRDS(wf_mlp_trained,"wf_mlp_trained.rds")
 
 
 
+## CARREGANDO OS MODELOS SALVOS
+
+# wf_pls_trained<- readRDS("wf_pls_trained.rds")
+# wf_las_trained<- readRDS("wf_las_trained.rds")
+# wf_rid_trained<- readRDS("wf_rid_trained.rds")
+# wf_net_trained<- readRDS("wf_net_trained.rds")
+# wf_rfo_trained<- readRDS("wf_rfo_trained.rds")
+# wf_xgb_trained<- readRDS("wf_xgb_trained.rds")
+# wf_mlp_trained<- readRDS("wf_mlp_trained.rds")
+
+
+
 ### VALIDATION ###
 
 # PREDIZENDO DADOS TESTE
 
-pred_rfo<- predict(wf_rfo_trained, df.test, type="prob")
+pred_pls<- predict(wf_pls_trained, df.test, type="prob")
 pred_las<- predict(wf_las_trained, df.test, type="prob")
 pred_rid<- predict(wf_rid_trained, df.test, type="prob")
 pred_net<- predict(wf_net_trained, df.test, type="prob")
-
-
+pred_rfo<- predict(wf_rfo_trained, df.test, type="prob")
+pred_xgb<- predict(wf_xgb_trained, df.test, type="prob")
+pred_mlp<- predict(wf_mlp_trained, df.test, type="prob")
 
 df.prob<- data.frame(df.test$grave,
                      pred_pls[,2],
                      pred_las[,2],
                      pred_rid[,2],
-                     pred_net[,2])
+                     pred_net[,2],
+                     pred_rfo[,2],
+                     pred_xgb[,2],
+                     pred_mlp[,2])
 
 colnames(df.prob)<- c("y",
                       "pls",
                       "las",
                       "rid",
-                      "net")
+                      "net",
+                      "rfo",
+                      "xgb",
+                      "mlp")
 
 head(df.prob)
 
@@ -343,6 +362,9 @@ df.class<- df.prob %>%
   mutate(las=ifelse(las<cut,0,1)) %>% 
   mutate(rid=ifelse(rid<cut,0,1)) %>% 
   mutate(net=ifelse(net<cut,0,1)) %>%
+  mutate(rfo=ifelse(rfo<cut,0,1)) %>% 
+  mutate(xgb=ifelse(xgb<cut,0,1)) %>% 
+  mutate(mlp=ifelse(mlp<cut,0,1)) %>%
   mutate(across(!y, as.factor))
 
 df.class %>% head()    # VISUALIZANDO CLASSES
@@ -356,46 +378,71 @@ df.class %>% head()    # VISUALIZANDO CLASSES
 medidas<- cbind(summary(conf_mat(df.class, y, pls))[,-2],
                 summary(conf_mat(df.class, y, las))[,3],
                 summary(conf_mat(df.class, y, rid))[,3],
-                summary(conf_mat(df.class, y, net))[,3])                     
+                summary(conf_mat(df.class, y, net))[,3],
+                summary(conf_mat(df.class, y, rfo))[,3],
+                #summary(conf_mat(df.class, y, xgb))[,3],
+                summary(conf_mat(df.class, y, mlp))[,3])                     
 
 colnames(medidas)<- c("medida",
                       "pls",
                       "las",
                       "rid",
-                      "net")
+                      "net",
+                      "rfo",
+                      #"xgb",
+                      "mlp")
 
 medidas
 
 
 
 
-
-
-
-
 ## COEFICIENTES DOS MODELOS TREINADOS
-
-coef_rfo_trained<- wf_rfo_trained %>% 
-  extract_fit_parsnip() %>% 
-  vip::vip(num_feature=trunc(sqrt(ncol(df.train))))
 
 coef_pls_trained<- wf_pls_trained %>% 
   extract_fit_parsnip() %>% 
   tidy() %>% 
-  filter(component==best_num_comp) %>% 
-  dplyr::select(value)
+  #filter(component==20) %>% 
+  filter(component==as.numeric(show_best(tune_pls,n=1)[1])) %>% 
+  filter(term != "Y") %>% 
+  dplyr::select(term, value)
 
 coef_las_trained<- wf_las_trained %>% 
   extract_fit_parsnip() %>% 
   tidy() %>% 
-  dplyr::select(estimate)
+  filter(term != "(Intercept)") %>% 
+  dplyr::select(term, estimate)
 
 coef_rid_trained<- wf_rid_trained %>% 
   extract_fit_parsnip() %>% 
   tidy() %>% 
-  dplyr::select(estimate)
+  filter(term != "(Intercept)") %>% 
+  dplyr::select(term, estimate)
 
+coef_net_trained<- wf_net_trained %>% 
+  extract_fit_parsnip() %>% 
+  tidy() %>% 
+  filter(term != "(Intercept)") %>% 
+  dplyr::select(term, estimate)
 
+coef_rfo_trained<- wf_rfo_trained %>% 
+  extract_fit_parsnip() %>% 
+  #vip::vip(num_feature=trunc(sqrt(ncol(df.train)))) %>% 
+  vip::vip(num_feature=2040)
+coef_rfo_trained<- coef_rfo_trained$data
+
+coef_xgb_trained<- wf_xgb_trained %>% 
+  extract_fit_parsnip() %>% 
+  #vip::vip(num_feature=trunc(sqrt(ncol(df.train)))) %>% 
+  vip::vip(num_feature=2040)
+coef_xgb_trained<- coef_xgb_trained$data
+
+coef_mlp_trained<- wf_mlp_trained %>% 
+  extract_fit_parsnip() %>% 
+  #vip::vip(num_feature=trunc(sqrt(ncol(df.train)))) %>% 
+  #vip::vip(num_feature=2040)
+  baguette::nnet_imp_garson()
+coef_mlp_trained<- coef_mlp_trained$data
 
 
 
